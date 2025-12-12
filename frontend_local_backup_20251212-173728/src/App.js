@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { Rnd } from 'react-rnd';
 import axios from 'axios';
@@ -70,7 +70,7 @@ function App() {
         coordinates: coordinates
       };
 
-      const response = await axios.post('https://boloforms-project.onrender.com/sign-pdf', payload);
+      const response = await axios.post('https://boloforms-project.onrender.com/', payload);
 
       if (response.data.success) {
         const link = document.createElement('a');

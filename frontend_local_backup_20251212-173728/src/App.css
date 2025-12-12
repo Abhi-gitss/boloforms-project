@@ -1,0 +1,38 @@
+.App {
+  text-align: center;
+  padding: 20px;
+}
+
+.workspace-container {
+  display: flex;
+  justify-content: center;
+  margin-top: 20px;
+  background-color: #f0f0f0;
+  padding: 20px;
+}
+
+/* Important: relative positioning allows the Draggable box (absolute) 
+  to position itself relative to this wrapper, not the whole page.
+*/
+.pdf-wrapper {
+  position: relative; 
+  border: 1px solid #ccc;
+  display: inline-block; /* Fits the content (the PDF) */
+}
+
+.signature-box {
+  width: 150px;
+  height: 50px;
+  border: 2px dashed #007bff;
+  background-color: rgba(0, 123, 255, 0.2);
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #007bff;
+  font-weight: bold;
+  position: absolute; /* Allows it to float over the PDF */
+  top: 0;
+  left: 0;
+  z-index: 10; /* Ensures it sits ON TOP of the PDF */
+}

@@ -1,27 +1,32 @@
-﻿// frontend/src/App.js
-import React, { useState, useRef } from "react";
-import { Document, Page } from "react-pdf";
-import { Rnd } from "react-rnd";
-import axios from "axios";
-import "./App.css";
+﻿import React, { useState, useRef, useEffect } from 'react';
+import { Document, Page, pdfjs } from 'react-pdf';
+import { Rnd } from 'react-rnd';
+import axios from 'axios';
+import './App.css';
 
-// Build-safe backend base URL (Vercel injects REACT_APP_BACKEND_URL at build time)
-const BACKEND = (process.env.REACT_APP_BACKEND_URL || "http://localhost:5000").replace(/\/$/, "");
+// ---------- add near top, after imports ----------
+const BACKEND = process.env.REACT_APP_BACKEND_URL || "https://boloforms-project.onrender.com";
 
-const fileToBase64 = (file) =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = (err) => reject(err);
-  });
+// Fix for PDF worker
+pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
+// ------------------------------------------------
 
-export default function App() {
+
+// Fix for PDF worker
+pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+
+function App() {
   const [pdfFile, setPdfFile] = useState(null);
-  const [signatureFile, setSignatureFile] = useState(null);
-  const [boxState, setBoxState] = useState({ x: 5, y: 70, width: 20, height: 8 }); // percents
+  const [signatureFile, setSignatureFile] = useState(null); 
+  
+  // --- RESPONSIVE STATE ---
+  // We store position/size as PERCENTAGES (0 to 100)
+  // This ensures the box stays anchored regardless of screen size 
+  const [boxState, setBoxState] = useState({ x: 0, y: 0, width: 20, height: 10 }); 
+
   const pdfContainerRef = useRef(null);
 
+  // Helper to get current container pixel dimensions
   const getContainerSize = () => {
     if (pdfContainerRef.current) {
       return pdfContainerRef.current.getBoundingClientRect();
@@ -29,37 +34,28 @@ export default function App() {
     return { width: 0, height: 0 };
   };
 
+  const fileToBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result); 
+      reader.onerror = error => reject(error);
+    });
+  };
+
   const onPdfChange = (e) => {
-    const f = e.target.files?.[0];
-    if (f) setPdfFile(f);
+    const file = e.target.files[0];
+    if (file) setPdfFile(file);
   };
 
   const onSignatureChange = (e) => {
-    const f = e.target.files?.[0];
-    if (f) setSignatureFile(f);
-  };
-
-  const callSignPdf = async (payload) => {
-    const url = `${BACKEND}/sign-pdf`;
-    console.log("Posting to backend URL:", url);
-    try {
-      const res = await axios.post(url, payload, { timeout: 120000 });
-      console.log("Backend response:", res.status, res.data);
-      return res.data;
-    } catch (err) {
-      console.error("sign-pdf failed:", {
-        status: err?.response?.status,
-        data: err?.response?.data,
-        message: err?.message,
-        requestUrl: err?.config?.url,
-      });
-      throw err;
-    }
+    const file = e.target.files[0];
+    if (file) setSignatureFile(file);
   };
 
   const handleSave = async () => {
     if (!pdfFile || !signatureFile) {
-      alert("Please upload both a PDF and a signature image.");
+      alert(" upload PDF and Signature.");
       return;
     }
 
@@ -67,6 +63,7 @@ export default function App() {
       const signatureBase64 = await fileToBase64(signatureFile);
       const pdfBase64 = await fileToBase64(pdfFile);
 
+      // The state is already in %, so we just rename keys to match backend expectation
       const coordinates = {
         xPercent: boxState.x,
         yPercent: boxState.y,
@@ -75,99 +72,99 @@ export default function App() {
       };
 
       const payload = {
-        pdfId: "client-generated-id-1",
-        pdfBase64,
-        signatureImageBase64: signatureBase64,
-        coordinates,
+        pdfId: "123",
+        pdfBase64: pdfBase64,
+        signatureImageBase64: signatureBase64, 
+        coordinates: coordinates
       };
 
-      // Log short preview
-      console.log("Payload preview:", {
-        pdfId: payload.pdfId,
-        coords: payload.coordinates,
-        pdf_b64_len: pdfBase64.length,
-        sig_b64_len: signatureBase64.length,
-      });
+      const response = await axios.post('${BACKEND}/sign-pdf', payload);
 
-      const data = await callSignPdf(payload);
-
-      // Expecting { success: true, pdf: "<base64>" } or similar
-      if (data && data.pdf) {
-        const link = document.createElement("a");
-        link.href = `data:application/pdf;base64,${data.pdf}`;
-        link.download = "signed_document.pdf";
+      if (response.data.success) {
+        const link = document.createElement('a');
+        link.href = `data:application/pdf;base64,${response.data.pdf}`;
+        link.download = 'signed_document.pdf';
         link.click();
-        alert("Success! Signed PDF downloaded.");
-      } else {
-        console.warn("Backend returned no pdf field:", data);
-        alert("Saved but no signed PDF returned. Check server logs.");
+        alert("Success! PDF Signed.");
       }
-    } catch (err) {
-      alert("Failed to sign PDF. See console for details.");
+    } catch (error) {
+      console.error(error);
+      alert("Failed.");
     }
   };
 
   return (
-    <div className="App" style={{ padding: 24, fontFamily: "Arial, sans-serif", textAlign: "center" }}>
-      <h2>BoloForms — small demo</h2>
-
-      <div className="controls" style={{ marginBottom: 12 }}>
+    <div className="App">
+      <h2>BoloForms Responsive Prototype</h2>
+      
+      <div className="controls">
         <input type="file" onChange={onPdfChange} accept="application/pdf" />
-        <input type="file" onChange={onSignatureChange} accept="image/png, image/jpeg" style={{ marginLeft: 10 }} />
-        <button onClick={handleSave} style={{ marginLeft: 10, background: "#1976d2", color: "#fff", border: "none", padding: "6px 12px", borderRadius: 4 }}>
-          Save (Sign)
-        </button>
+        <input type="file" onChange={onSignatureChange} accept="image/png, image/jpeg" style={{marginLeft: '10px'}}/>
+        <button onClick={handleSave} style={{marginLeft: '10px', background: 'blue', color: 'white'}}>Save</button>
       </div>
 
-      <div style={{ marginTop: 20, display: "flex", justifyContent: "center" }}>
-        {pdfFile ? (
-          <div ref={pdfContainerRef} style={{ position: "relative", display: "inline-block", width: "90%", border: "1px solid #ddd", padding: 8 }}>
+      <div className="workspace" style={{marginTop: '20px', display: 'flex', justifyContent: 'center'}}>
+        {pdfFile && (
+          // Container must be relative so children are positioned inside it
+          <div className="pdf-container" ref={pdfContainerRef} style={{position: 'relative', display: 'inline-block', width: '90%', border: '1px solid grey'}}>
+            
+            {/* React-PDF renders a canvas. 
+              We set width to "100%" so it scales with the div (Responsive) 
+            */}
             <Document file={pdfFile}>
-              <Page pageNumber={1} renderTextLayer={false} renderAnnotationLayer={false} width={pdfContainerRef.current?.clientWidth || 800} />
+              <Page 
+                pageNumber={1} 
+                renderTextLayer={false} 
+                renderAnnotationLayer={false} 
+                width={pdfContainerRef.current?.clientWidth || 600} // Dynamic Width
+              />
             </Document>
-
+            
+            {/* RND COMPONENT
+               We convert % state to Pixels for rendering, 
+               but we convert Pixels back to % when dragging stops.
+            */}
             <Rnd
               bounds="parent"
+              // Render using percentages directly!
               size={{ width: `${boxState.width}%`, height: `${boxState.height}%` }}
-              position={{
-                x: (boxState.x / 100) * (pdfContainerRef.current?.clientWidth || 0),
-                y: (boxState.y / 100) * (pdfContainerRef.current?.clientHeight || 0),
-              }}
+              position={{ x: (boxState.x / 100) * (pdfContainerRef.current?.clientWidth || 0), y: (boxState.y / 100) * (pdfContainerRef.current?.clientHeight || 0) }}
+              
               onDragStop={(e, d) => {
                 const { width, height } = getContainerSize();
-                setBoxState((prev) => ({
+                // Convert Pixels -> Percent
+                setBoxState(prev => ({
                   ...prev,
-                  x: Math.max(0, Math.min(100, (d.x / width) * 100)),
-                  y: Math.max(0, Math.min(100, (d.y / height) * 100)),
+                  x: (d.x / width) * 100,
+                  y: (d.y / height) * 100
                 }));
               }}
+              
               onResizeStop={(e, direction, ref, delta, position) => {
                 const { width, height } = getContainerSize();
+                // Convert Pixels -> Percent
                 setBoxState({
-                  width: Math.max(1, Math.min(100, (ref.offsetWidth / width) * 100)),
-                  height: Math.max(1, Math.min(100, (ref.offsetHeight / height) * 100)),
-                  x: Math.max(0, Math.min(100, (position.x / width) * 100)),
-                  y: Math.max(0, Math.min(100, (position.y / height) * 100)),
+                  width: (ref.offsetWidth / width) * 100,
+                  height: (ref.offsetHeight / height) * 100,
+                  x: (position.x / width) * 100,
+                  y: (position.y / height) * 100
                 });
               }}
+              
               style={{
-                border: "2px dashed rgba(220,0,0,0.9)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                background: "rgba(255, 0, 0, 0.06)",
-                color: "#c62828",
-                fontWeight: "600",
-                cursor: "move",
+                border: '2px dashed red',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'rgba(255, 0, 0, 0.1)'
               }}
             >
               Sign
             </Rnd>
+
           </div>
-        ) : (
-          <div style={{ color: "#666" }}>Select a PDF to preview</div>
         )}
       </div>
     </div>
   );
 }
+
+export default App;

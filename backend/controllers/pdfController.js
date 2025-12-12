@@ -1,115 +1,101 @@
-// controllers/pdfController.js
-// Purpose: receive a PDF and a signature image (both as data URLs),
-// place the signature in the requested area and return the signed PDF (base64).
-// Also store simple audit info (orig / final hashes).
-
 const { PDFDocument } = require('pdf-lib');
 const crypto = require('crypto');
-const PdfRecord = require('../models/PdfRecord');
+const PdfRecord = require('../models/PdfRecord'); 
 
-async function signPdfController(req, res) {
+const signPdfController = async (req, res) => {
   try {
-    // --- 1. get the payload ---
+    // 1. PAYLOAD: Receive data from frontend
     const { pdfId, signatureImageBase64, coordinates, pdfBase64 } = req.body;
 
     if (!pdfBase64) {
-      return res.status(400).json({ message: 'Missing pdfBase64 in request.' });
+        return res.status(400).json({ message: "No PDF data received." });
     }
-    if (!signatureImageBase64) {
-      return res.status(400).json({ message: 'Missing signatureImageBase64 in request.' });
-    }
-    // coordinates expected shape:
-    // { xPercent, yPercent, widthPercent, heightPercent, page? }
-    if (!coordinates || typeof coordinates.xPercent !== 'number') {
-      return res.status(400).json({ message: 'Invalid coordinates.' });
-    }
+    
+    // 2. PREPARE PDF: Clean prefix and load
+    const cleanPdfBase64 = pdfBase64.replace(/^data:application\/pdf;base64,/, "");
+    const existingPdfBytes = Buffer.from(cleanPdfBase64, 'base64');
 
-    // --- 2. decode the incoming PDF data URL ---
-    // Accept formats like: data:application/pdf;base64,.... or a raw base64 string.
-    const cleanedPdfBase64 = pdfBase64.replace(/^data:application\/pdf;base64,/, '').trim();
-    const pdfBuffer = Buffer.from(cleanedPdfBase64, 'base64');
+    // 3. SECURITY: Audit Trail (Hash Original) [Requirement: 89]
+    const originalHash = crypto.createHash('sha256').update(existingPdfBytes).digest('hex');
 
-    // --- 3. original hash for audit ---
-    const originalHash = crypto.createHash('sha256').update(pdfBuffer).digest('hex');
-
-    // --- 4. load PDF ---
-    const pdfDoc = await PDFDocument.load(pdfBuffer);
+    // 4. LOAD DOCUMENT
+    const pdfDoc = await PDFDocument.load(existingPdfBytes);
     const pages = pdfDoc.getPages();
-    const pageIndex = (coordinates.page && coordinates.page - 1) || 0;
-    if (pageIndex < 0 || pageIndex >= pages.length) {
-      return res.status(400).json({ message: 'Invalid page number in coordinates.' });
-    }
-    const page = pages[pageIndex];
+    const firstPage = pages[0];
 
-    // get page size in PDF points
-    const { width: pdfPageWidth, height: pdfPageHeight } = page.getSize();
+    // Get the real PDF dimensions (e.g., A4 size in points)
+    const { width: pdfPageWidth, height: pdfPageHeight } = firstPage.getSize();
 
-    // --- 5. prepare signature image ---
-    const cleanedSig = signatureImageBase64.replace(/^data:image\/\w+;base64,/, '').trim();
-    const sigBuffer = Buffer.from(cleanedSig, 'base64');
+    // 5. PROCESS SIGNATURE: Handle PNG/JPEG & Clean Data
+    const cleanSigBase64 = signatureImageBase64.replace(/^data:image\/\w+;base64,/, "");
+    const imageBuffer = Buffer.from(cleanSigBase64, 'base64');
 
-    let embeddedImage;
+    let signatureImage;
     if (signatureImageBase64.startsWith('data:image/jpeg') || signatureImageBase64.startsWith('data:image/jpg')) {
-      embeddedImage = await pdfDoc.embedJpg(sigBuffer);
+        signatureImage = await pdfDoc.embedJpg(imageBuffer);
     } else {
-      // default to PNG for safety
-      embeddedImage = await pdfDoc.embedPng(sigBuffer);
+        signatureImage = await pdfDoc.embedPng(imageBuffer);
     }
 
-    // dimensions of the embedded image (in PDF points)
-    const sigDims = embeddedImage.scale(1); // { width, height }
+    // Get original dimensions of the uploaded signature image
+    const sigDims = signatureImage.scale(1);
 
-    // --- 6. convert percent coords -> PDF points ---
-    const boxWidthPts = (coordinates.widthPercent / 100) * pdfPageWidth;
-    const boxHeightPts = (coordinates.heightPercent / 100) * pdfPageHeight;
-    const boxLeftPts = (coordinates.xPercent / 100) * pdfPageWidth;
-    // Browser yPercent is from top, PDF origin is bottom-left.
-    // So compute y distance from top, then flip:
-    const yDistanceFromTopPts = (coordinates.yPercent / 100) * pdfPageHeight;
-    const boxBottomPts = pdfPageHeight - yDistanceFromTopPts - boxHeightPts;
+    // --- MATH SECTION: COORDINATES ---
+    // Map the percentage coordinates (from Frontend) to real PDF points
+    const xCoords = (coordinates.xPercent / 100) * pdfPageWidth;
+    
+    // PDF Y-axis starts at bottom-left, Browser starts top-left. We must flip it.
+    const yDistanceFromTop = (coordinates.yPercent / 100) * pdfPageHeight;
+    const yCoords = pdfPageHeight - yDistanceFromTop;
 
-    // --- 7. fit signature into the box while preserving aspect ratio ---
-    const scaleX = boxWidthPts / sigDims.width;
-    const scaleY = boxHeightPts / sigDims.height;
-    const scale = Math.min(scaleX, scaleY, 1); // don't upscale beyond natural size
-    const finalWidth = sigDims.width * scale;
-    const finalHeight = sigDims.height * scale;
+    // --- MATH SECTION: ASPECT RATIO CONSTRAINT [Requirement: 86] ---
+    // 1. Calculate the dimensions of the box the user drew
+    const boxWidth = (coordinates.widthPercent / 100) * pdfPageWidth;
+    const boxHeight = (coordinates.heightPercent / 100) * pdfPageHeight;
 
-    // center the image inside the box
-    const xDraw = boxLeftPts + (boxWidthPts - finalWidth) / 2;
-    const yDraw = boxBottomPts + (boxHeightPts - finalHeight) / 2;
+    // 2. Calculate ratios to fit the image INSIDE the box
+    const widthRatio = boxWidth / sigDims.width;
+    const heightRatio = boxHeight / sigDims.height;
+    
+    // 3. Use Math.min to ensure the image is "Contained" (fits the smallest dimension)
+    // This prevents stretching or distortion.
+    const scaleFactor = Math.min(widthRatio, heightRatio);
 
-    // --- 8. draw to page ---
-    page.drawImage(embeddedImage, {
-      x: xDraw,
-      y: yDraw,
+    const finalWidth = sigDims.width * scaleFactor;
+    const finalHeight = sigDims.height * scaleFactor;
+
+    // 4. Calculate Offsets to CENTER the image in the box
+    const xOffset = (boxWidth - finalWidth) / 2;
+    const yOffset = (boxHeight - finalHeight) / 2;
+
+    // 6. DRAW: Overlay the image onto the PDF
+    firstPage.drawImage(signatureImage, {
+      x: xCoords + xOffset,
+      y: yCoords - finalHeight - yOffset, // Adjust Y because drawImage anchors at bottom-left
       width: finalWidth,
-      height: finalHeight
+      height: finalHeight,
     });
 
-    // --- 9. save final PDF and compute final hash ---
-    const finalPdfBytes = await pdfDoc.save();
-    const finalHash = crypto.createHash('sha256').update(Buffer.from(finalPdfBytes)).digest('hex');
+    // 7. FINALIZE: Save and Hash [Requirement: 90]
+    const pdfBytes = await pdfDoc.save();
+    const finalHash = crypto.createHash('sha256').update(Buffer.from(pdfBytes)).digest('hex');
 
-    // --- 10. save audit record (minimal) ---
-    const record = new PdfRecord({
-      pdfId: pdfId || null,
+    // 8. DB: Store the Audit Trail [Requirement: 91]
+    const newRecord = new PdfRecord({
       originalHash,
-      finalHash
+      finalHash,
+      createdAt: new Date()
     });
-    await record.save().catch(err => {
-      // don't block the response if DB logging fails — just log locally
-      console.error('Failed to save PdfRecord:', err.message);
-    });
+    await newRecord.save();
 
-    // --- 11. return base64 to client ---
-    const finalBase64 = Buffer.from(finalPdfBytes).toString('base64');
-    return res.json({ success: true, pdf: finalBase64, originalHash, finalHash });
+    // 9. OUTPUT: Return the signed PDF
+    const finalPdfBase64 = Buffer.from(pdfBytes).toString('base64');
+    res.json({ success: true, pdf: finalPdfBase64 });
 
-  } catch (err) {
-    console.error('Error in signPdfController:', err);
-    return res.status(500).json({ success: false, message: err.message });
+  } catch (error) {
+    console.error("Error signing PDF:", error);
+    res.status(500).json({ message: "Error signing PDF: " + error.message });
   }
-}
+};
 
 module.exports = { signPdfController };

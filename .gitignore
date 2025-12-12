@@ -1,0 +1,18 @@
+﻿# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Env files (DO NOT COMMIT)
+.env
+url.env
+
+# Build outputs
+frontend/build/
+backend/dist/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db

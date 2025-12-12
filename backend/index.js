@@ -1,28 +1,42 @@
+// backend/index.js
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
-// Make sure this path is correct. If your file is named 'pdfController.js', keep it like this:
-const { signPdfController } = require('./controllers/pdfController'); 
+const { signPdfController } = require('./controllers/pdfController'); // keep your controller
 
 const app = express();
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
-// Middleware
-app.use(cors());
+// FRONTEND_URL should be the exact origin your front-end is served from, e.g.
+// https://boloforms-project.vercel.app
+const FRONTEND_URL = process.env.FRONTEND_URL || '*';
+
+app.use(cors({
+  origin: FRONTEND_URL,
+}));
 app.use(express.json({ limit: '50mb' }));
 
-// --- MONGODB CONNECTION ---
-// TODO: PASTE YOUR MONGODB CONNECTION STRING BELOW (Keep the quotes "")
-const MONGO_URI = "mongodb+srv://boloproject:boloproject@cluster0.gjjerkp.mongodb.net/?appName=Cluster0";
+// Mongo connection string from env
+const MONGO_URI = process.env.MONGO_URI;
+if (!MONGO_URI) {
+  console.error(' ERROR: MONGO_URI not set in environment. Exiting.');
+  process.exit(1);
+}
 
 mongoose.connect(MONGO_URI)
-  .then(() => console.log("Connected Successfully"))
-  .catch(err => console.error("Connection Error:", err));
+  .then(() => console.log('✅ MongoDB connected successfully'))
+  .catch(err => {
+    console.error(' Failed to connect to MongoDB:', err);
+    process.exit(1);
+  });
 
-// --- ROUTES ---
-// The error was here. This line is now clean:
+// Routes
 app.post('/sign-pdf', signPdfController);
 
+// Health check
+app.get('/health', (req, res) => res.json({ ok: true, time: Date.now() }));
+
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`🚀 Backend listening on port ${PORT}`);
 });
